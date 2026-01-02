@@ -1,0 +1,120 @@
+name: Build and Publish Wheels
+
+on:
+  pull_request:
+    branches:
+      - master
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build_wheels:
+    name: Build wheels (${{ matrix.os }} ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64 - native build on x86_64 runner
+          - os: linux
+            arch: x86_64
+            runner: ubuntu-latest
+          # Linux aarch64 - native build on ARM64 runner (much faster than QEMU)
+          - os: linux
+            arch: aarch64
+            runner: ubuntu-24.04-arm
+          # macOS - universal build on ARM runner
+          - os: macos
+            arch: universal
+            runner: macos-latest
+          # Windows
+          - os: windows
+            arch: AMD64
+            runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache vcpkg packages (Windows)
+        if: matrix.os == 'windows'
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/installed
+          # Cache key includes vcpkg package - bump suffix to rebuild
+          key: vcpkg-suitesparse-umfpack-x64-windows-v1
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.os }}-${{ matrix.arch }}
+
+      - name: Prepare ccache for Docker
+        if: matrix.os == 'linux'
+        run: |
+          mkdir -p ~/.cache/ccache
+          echo "CCACHE_DIR=$HOME/.cache/ccache" >> "$GITHUB_ENV"
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.22
+        env:
+          # Build only the architecture for this matrix entry
+          CIBW_ARCHS_LINUX: ${{ matrix.arch }}
+          CIBW_ARCHS_MACOS: x86_64 arm64
+          CIBW_ARCHS_WINDOWS: ${{ matrix.arch }}
+          # Mount ccache directory into Linux containers
+          CIBW_ENVIRONMENT_LINUX: "CCACHE_DIR=/host-ccache"
+          CIBW_CONTAINER_ENGINE: "docker; create_args: -v /home/runner/.cache/ccache:/host-ccache"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev libopenblas-dev swig
+
+      - name: Build sdist
+        run: pipx run build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  upload_pypi:
+    name: Upload to PyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/scikit-umfpack
+    permissions:
+      id-token: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

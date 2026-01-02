@@ -43,3 +43,46 @@ homepage = "https://scikit-umfpack.github.io/scikit-umfpack"
 documentation = "https://scikit-umfpack.github.io/scikit-umfpack"
 source = "https://github.com/scikit-umfpack/scikit-umfpack"
 tracker = "https://github.com/scikit-umfpack/scikit-umfpack/issues"
+
+[tool.cibuildwheel]
+# Skip PyPy, musllinux, and Python 3.8
+skip = "pp* *-musllinux_* cp38-*"
+
+# Test the wheel after building
+test-requires = "pytest"
+test-command = "pytest --pyargs scikits.umfpack"
+
+[tool.cibuildwheel.linux]
+# Use manylinux_2_28 for newer SuiteSparse with pkg-config support
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+# Install ccache from EPEL and set up symlinks so meson finds it
+before-all = [
+    "dnf install -y epel-release",
+    "dnf install -y suitesparse-devel openblas-devel swig ccache",
+    # Create ccache symlinks in /usr/local/bin (first in PATH) so meson detects it
+    "ln -sf /usr/bin/ccache /usr/local/bin/gcc",
+    "ln -sf /usr/bin/ccache /usr/local/bin/g++",
+    "ln -sf /usr/bin/ccache /usr/local/bin/cc",
+    "ln -sf /usr/bin/ccache /usr/local/bin/c++",
+]
+
+[tool.cibuildwheel.macos]
+# Install ccache - meson auto-detects it for compiler caching across Python versions
+before-all = "brew install suite-sparse swig pkg-config ccache"
+# Ensure brew paths are available (Apple Silicon uses /opt/homebrew)
+# MACOSX_DEPLOYMENT_TARGET=15.0 required because brew libs are built for macOS 15+
+environment = { PATH = "/opt/homebrew/bin:/usr/local/bin:$PATH", LIBRARY_PATH = "/opt/homebrew/lib:/usr/local/lib", CPATH = "/opt/homebrew/include:/usr/local/include", PKG_CONFIG_PATH = "/opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig", MACOSX_DEPLOYMENT_TARGET = "15.0" }
+# Skip testing x86_64 wheels on ARM64 runners (cross-compiled, can't load ARM libs)
+test-skip = "*_x86_64"
+
+[tool.cibuildwheel.windows]
+before-all = [
+    "choco install -y swig",
+    "vcpkg install suitesparse-umfpack:x64-windows",
+]
+before-build = "pip install delvewheel"
+repair-wheel-command = "delvewheel repair --add-path C:/vcpkg/installed/x64-windows/bin -w {dest_dir} {wheel}"
+# Set environment variables for vcpkg-installed libraries (pkg-config and cmake discovery)
+# Use forward slashes to avoid backslash escaping issues in TOML/shell
+environment = { PKG_CONFIG_PATH = "C:/vcpkg/installed/x64-windows/lib/pkgconfig", CMAKE_PREFIX_PATH = "C:/vcpkg/installed/x64-windows" }

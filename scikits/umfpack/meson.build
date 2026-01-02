@@ -63,6 +63,7 @@ _umfpack_swig = custom_target('_umfpack_swig',
 _c_args = cc.get_supported_arguments(
   '-Wno-misleading-indentation',
   '-Wno-incompatible-pointer-types',
+  '-Wno-int-conversion',  # NumPy 2.x import_array() compatibility
 )
 
 __umfpack = py.extension_module('__umfpack',
